@@ -25,6 +25,6 @@ variable "object_lock_enabled" {
 }
 
 variable "tags" {
-    description = "The tags to be assigned to the S3 Bucket"
-    type        = map(string)
+  description = "The tags to be assigned to the S3 Bucket"
+  type        = map(string)
 }
