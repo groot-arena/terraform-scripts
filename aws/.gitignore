@@ -1,0 +1,31 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.log
+
+# Variable files – commit only our environment-specific ones (non-sensitive)
+*.tfvars
+!dev.tfvars
+!stg.tfvars
+!prd.tfvars
+!terraform.tfvars.example
+
+# Keep the lock file committed (best practice)
+!.terraform.lock.hcl
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary / backup files
+*.bak
+*.tmp
