@@ -1,0 +1,196 @@
+name: Terraform CI/CD
+
+on:
+  push:
+    branches: 
+      - dev
+      - staging
+      - prd
+    tags: [ 'v*' ]
+    paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+      - '.github/workflows/terraform.yml'
+    pull_request:
+      branches: 
+        - dev
+        - staging
+        - prd
+      paths:
+      - '**/*.tf'
+      - '**/*.tfvars'
+
+    # ── PLAN + APPLY only via manual trigger with parameters
+    workflow_dispatch:
+      inputs:
+        infra:
+          description: 'Infrastructure to deploy'
+          required: true
+          type: choice
+          options:
+            - aws
+            - gcp
+            - azure
+          default: 'aws'
+        environment:
+          description: 'Environment (dev / stg / prd)'
+          required: true
+          type: choice
+          options:
+            - dev
+            - stg
+            - prd
+          default: 'dev'
+        tag:
+          description: 'Git tag to deploy (e.g. v1.2.3)'
+          required: true
+          type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    name: Validate & Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.10"   # Latest stable as of 2026
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      # ── tflint ─────────────────────────────────────
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Init tflint
+        run: tflint --init
+
+      - name: Run tflint
+        run: tflint --recursive --minimum-failure-severity=warning
+
+      # ── tfsec ──────────────────────────────────────
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          additional_flags: "--format=sarif --severity=WARNING --no-color"
+          upload_sarif: true   # Shows results in GitHub Security tab
+
+  plan:
+    name: Plan - ${{ inputs.environment }} (${{ inputs.infra }})
+    needs: validate
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout selected tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.10"  # Update to latest stable version
+
+      # ── DYNAMIC CREDENTIALS PER INFRA ──────────────────────────────
+      - name: Configure AWS credentials (OIDC)
+        if: inputs.infra == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-${{ matrix.env }}-github-actions
+
+      - name: Configure GCP credentials (OIDC)
+        if: inputs.infra == 'gcp'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Azure credentials (OIDC)
+        if: inputs.infra == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Terraform Plan ─────────────────────────────────────────────
+      - name: Terraform Init + Plan
+        working-directory: ./${{ inputs.infra }}
+        run: |
+          terraform init
+          terraform workspace select ${{ inputs.environment }} 2>/dev/null || terraform workspace new ${{ inputs.environment }}
+          terraform plan -var-file=${{ inputs.environment }}.tfvars -out=tfplan.binary
+
+      - name: Show Plan Summary
+        run: |
+          echo "::group::Terraform Plan Summary"
+          terraform show -no-color tfplan.binary | head -n 100
+          echo "::endgroup::"
+
+  apply:
+    name: Apply - ${{ inputs.environment }} (${{ inputs.infra }})
+    needs: plan
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }} # ← Manual approval gate
+
+    steps:
+      - name: Checkout selected tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.10"
+
+      # ── DYNAMIC CREDENTIALS PER INFRA (same as plan) ───────────────
+      - name: Configure AWS credentials (OIDC)
+        if: inputs.infra == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: terraform-apply-${{ inputs.environment }}-github-actions
+
+      - name: Configure GCP credentials (OIDC)
+        if: inputs.infra == 'gcp'
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Azure credentials (OIDC)
+        if: inputs.infra == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Terraform Apply ────────────────────────────────────────────
+      - name: Terraform Init + Apply
+        working-directory: ./${{ inputs.infra }}
+        run: |
+          terraform init
+          terraform workspace select ${{ inputs.environment }} 2>/dev/null || terraform workspace new ${{ inputs.environment }}
+          terraform apply -var-file=${{ inputs.environment }}.tfvars -auto-approve
