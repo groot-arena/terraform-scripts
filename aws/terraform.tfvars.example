@@ -1,0 +1,81 @@
+# AWS Region
+aws_region = "<region>"
+
+# Resource Tagging Strategy
+# Standard tags applied to all resources for management and cost tracking
+common_tags = {
+  Application = "<Application/Project name>"
+  Environment = "<environment>"
+  ManagedBy   = "Terraform"
+  Creator     = "<creator name or email>"
+  Owner       = "<owner name or email>"
+}
+
+# Environment and Project
+environment  = "<environment>"
+project_name = "<project_name>"
+
+# Computed locals for reusability and DRY principles
+locals {
+  # Generate standardized S3 bucket names using prefix to avoid hardcoding
+  s3_bucket_prefix = "s3-${replace(lower(replace(project_name, " ", "-")), "/[^a-z0-9-]/", "")}-${environment}-"
+  
+  # Merge common tags with resource-specific tags
+  merged_s3_tags = {
+    for k, v in var.s3_buckets : k => merge(var.common_tags, v.tags)
+  }
+}
+
+# Optimized S3 Buckets Configuration
+# - Uses bucket_prefix for dynamic naming to reduce repetition and errors
+# - Enables server-side encryption (SSE-S3) by default for security
+# - Adds public access block for compliance
+# - Includes lifecycle rules example for cost optimization (uncomment/adjust as needed)
+# - Versioning enabled for data protection
+s3_buckets = {
+  "bucket_name" = {
+    bucket_name           = null  # Will use prefix if provided
+    bucket_prefix         = local.s3_bucket_prefix
+    force_destroy         = false
+    object_lock_enabled   = false
+    enable_versioning     = true
+    server_side_encryption_configuration = {
+      rule = {
+        apply_server_side_encryption_by_default = {
+          sse_algorithm = "AES256"
+        }
+      }
+    }
+    public_access_block = {
+      block_public_acls       = true
+      block_public_policy     = true
+      ignore_public_acls      = true
+      restrict_public_buckets = true
+    }
+    # Optional: Lifecycle policy for cost optimization (e.g., transition to IA after 30 days)
+    # lifecycle_rule = {
+    #   id      = "expire-old-versions"
+    #   enabled = true
+    #   noncurrent_version_expiration = {
+    #     noncurrent_days = 90
+    #   }
+    #   transition = [
+    #     {
+    #       days          = 30
+    #       storage_class = "STANDARD_IA"
+    #     }
+    #   ]
+    # }
+
+    tags = {
+      Name        = "${local.s3_bucket_prefix}bucket-name"
+      Description = "<description>"
+      # Additional bucket-specific tags can be added here
+    }
+  }
+  # Example: Add more buckets dynamically
+  # "another_bucket" = {
+  #   bucket_prefix = local.s3_bucket_prefix
+  #   # ... other configs
+  # }
+}
