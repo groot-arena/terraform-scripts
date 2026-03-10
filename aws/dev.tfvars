@@ -16,7 +16,7 @@ environment  = "dta"
 project_name = "dmp"
 
 s3_buckets = {
-    "dmp-alb-logs" = {
+  "groot-alb-logs" = {
     bucket_name         = "s3-groot-alb-logs"
     bucket_prefix       = null
     force_destroy       = false
